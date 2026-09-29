@@ -24,16 +24,8 @@ conda env create --file environment.yml
 # Activate environment  
 conda activate rl4ising-docs
 
-# Build the documentation
-sphinx-build -b html -n source/ build/
+# Build and preview the documentation
+sphinx-autobuild -n --open-browser source/ build/
 ```
 
-The output HTML files will be located in the `build/` directory.
-
-To preview the documentation locally, start a web server from the `docs` folder:
-
-```bash
-python -m http.server 8000 --directory build
-```
-
-Then open http://localhost:8000 in your browser. Press `Ctrl+C` in the terminal to stop the server.
+The output HTML files will be located in the `build/` directory. The preview server automatically opens in your browser and reloads when documentation files change. Press `Ctrl+C` in the terminal to stop the server.
