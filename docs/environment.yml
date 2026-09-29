@@ -1,4 +1,4 @@
-name: myenv
+name: rl4ising-docs
 channels:
   - conda-forge
 dependencies:
