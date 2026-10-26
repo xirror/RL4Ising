@@ -2,7 +2,6 @@ from pyscipopt import Model, quicksum
 
 
 def extract_result(model, x, time_limit):
-    solver_status = str(model.getStatus())
     statuses = {
         "optimal": "optimal",
         "timelimit": "time_limit",
@@ -12,8 +11,9 @@ def extract_result(model, x, time_limit):
         "inforunbd": "infeasible_or_unbounded",
         "unknown": "error",
     }
+    
     result = {
-        "status": statuses.get(solver_status, "limit"),
+        "status": statuses.get(model.getStatus(), "limit"),
         "objective": None,
         "bound": model.getDualbound(),
         "duration": model.getSolvingTime(),
@@ -21,6 +21,7 @@ def extract_result(model, x, time_limit):
         "gap": None,
         "bits": None,
     }
+    
     if model.isInfinity(abs(result["bound"])):
         result["bound"] = None
 

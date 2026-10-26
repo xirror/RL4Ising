@@ -1,8 +1,8 @@
 import argparse
+from importlib import import_module
 from pathlib import Path
 
-from utils import base64_encode, read_nxgraph
-from scip import solve
+from .utils import base64_encode, read_nxgraph
 
 
 def write_result(result, output_path, print_terminal=True):
@@ -26,12 +26,13 @@ def write_result(result, output_path, print_terminal=True):
         print(text)
 
 
-def run_single_file(input_path, time_limit=3600, out_dir="results"):
+def run_single_file(input_path, time_limit=3600, out_dir="results", solver="scip"):
+    adapter = import_module(f".{solver}", package=__spec__.parent)
     input_path = Path(input_path)
     output_path = Path(out_dir) / f"{input_path.stem}.txt"
     graph = read_nxgraph(str(input_path))
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    result = solve(graph, time_limit, output_path.with_suffix(".log"))
+    result = adapter.solve(graph, time_limit, output_path.with_suffix(".log"))
     write_result(result, output_path)
     return result
 
@@ -48,7 +49,7 @@ def main(argv=None):
     parser.add_argument(
         "--solver", 
         required=True,
-        choices=["scip"]
+        choices=["scip", "gurobi"]
     )
     
     parser.add_argument(
@@ -74,7 +75,7 @@ def main(argv=None):
         if input_path.is_dir():
             files = sorted(file for file in input_path.glob("*.txt") if file.is_file())
         for file in files:
-            run_single_file(file, args.time_limit, args.out_dir)
+            run_single_file(file, args.time_limit, args.out_dir, args.solver)
 
 
 if __name__ == "__main__":
