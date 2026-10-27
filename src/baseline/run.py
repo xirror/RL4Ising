@@ -1,4 +1,5 @@
 import argparse
+import csv
 from importlib import import_module
 from pathlib import Path
 
@@ -28,22 +29,31 @@ def write_result(result, output_path, print_terminal=True):
 
 def run_single_file(input_path, time_limit=3600, out_dir="results", solver="scip"):
     adapter = import_module(f".{solver}", package=__spec__.parent)
+    
     input_path = Path(input_path)
     output_path = Path(out_dir) / f"{input_path.stem}.txt"
-    if input_path.resolve() in (output_path.resolve(), output_path.with_suffix(".log").resolve()):
+    log_path = output_path.with_suffix(".log")
+
+    if input_path.resolve() in (output_path.resolve(), log_path.resolve()):
         raise ValueError(f"Output would overwrite input: {input_path}")
+    
     graph = read_nxgraph(str(input_path))
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    result = adapter.solve(graph, time_limit, output_path.with_suffix(".log"))
+    result = adapter.solve(graph, time_limit, log_path)
     write_result(result, output_path)
     return result
+
+
+
+
+
 
 
 def prepare_runs(paths, out_dir):
     out_dir = Path(out_dir).resolve()
     jobs = []
     inputs = set()
-    outputs = set()
+    outputs = {(out_dir / "baseline_results.csv").resolve()}
     seen = set()
 
     for path in paths:
@@ -99,6 +109,33 @@ def prepare_runs(paths, out_dir):
     return jobs
 
 
+def run_batch(jobs, solver, time_limit, out_dir):
+    output_dir = Path(out_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    fields = ("input_path", "solver", "status", "objective", "bound", "duration", "time_limit", "gap")
+    csv_path = output_dir / "baseline_results.csv"
+    
+    with csv_path.open("w", newline="", encoding="utf-8") as stream:
+
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        stream.flush()
+        
+        for file, graph_out_dir in jobs:
+            result = run_single_file(file, time_limit, graph_out_dir, solver)
+            writer.writerow({
+                "input_path": str(file.resolve()),
+                "solver": solver,
+                "status": result["status"],
+                "objective": result["objective"],
+                "bound": result["bound"],
+                "duration": result["duration"],
+                "time_limit": result["time_limit"],
+                "gap": result["gap"],
+            })
+            stream.flush()
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Run baseline solver on graphs.")
     
@@ -133,8 +170,8 @@ def main(argv=None):
     
     args = parser.parse_args(argv)
 
-    for file, out_dir in prepare_runs(args.paths, args.out_dir):
-        run_single_file(file, args.time_limit, out_dir, args.solver)
+    jobs = prepare_runs(args.paths, args.out_dir)
+    run_batch(jobs, args.solver, args.time_limit, args.out_dir)
 
 
 if __name__ == "__main__":
