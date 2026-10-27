@@ -43,12 +43,6 @@ def run_single_file(input_path, time_limit=3600, out_dir="results", solver="scip
     write_result(result, output_path)
     return result
 
-
-
-
-
-
-
 def prepare_runs(paths, out_dir):
     out_dir = Path(out_dir).resolve()
     jobs = []
@@ -109,19 +103,54 @@ def prepare_runs(paths, out_dir):
     return jobs
 
 
-def run_batch(jobs, solver, time_limit, out_dir):
+def run_batch(jobs, solver, time_limit, out_dir, retry_timeouts=False, retry_license=False):
     output_dir = Path(out_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     fields = ("input_path", "solver", "status", "objective", "bound", "duration", "time_limit", "gap")
     csv_path = output_dir / "baseline_results.csv"
+    latest_statuses = {}
     
-    with csv_path.open("w", newline="", encoding="utf-8") as stream:
+    has_header = csv_path.exists() and csv_path.stat().st_size > 0    
+    
+    # Load previous csv results so completed graphs can be skipped on reruns.
+    if has_header:
+        with csv_path.open(newline="", encoding="utf-8") as stream:
+            reader = csv.DictReader(stream)
 
-        writer = csv.DictWriter(stream, fieldnames=fields)
-        writer.writeheader()
-        stream.flush()
+            if reader.fieldnames != list(fields):
+                raise ValueError(f"Unexpected CSV columns: {csv_path}")
+
+            for row in reader:
+                if None in row or any(value is None for value in row.values()):
+                    raise ValueError(f"Incomplete CSV record: {csv_path}")
+
+                input_path = str(Path(row["input_path"]).resolve())
+                
+                # Keep the latest status for each graph and solver.
+                key = (input_path, row["solver"])
+                latest_statuses[key] = row["status"]
+
+    statuses_to_skip = {"optimal", "infeasible", "unbounded", "infeasible_or_unbounded", "limit"}
+    
+    if not retry_timeouts:
+        statuses_to_skip.add("time_limit")
+    if not retry_license:
+        statuses_to_skip.add("license_error")
         
+    with csv_path.open("a", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        if not has_header:
+            writer.writeheader()
+            stream.flush()
+            
+            
         for file, graph_out_dir in jobs:
+            
+            # Skip this graph if its previous result for this solver doesn't need retrying.
+            key = (str(file.resolve()), solver)
+            if latest_statuses.get(key) in statuses_to_skip:
+                continue
+
             result = run_single_file(file, time_limit, graph_out_dir, solver)
             writer.writerow({
                 "input_path": str(file.resolve()),
@@ -138,13 +167,6 @@ def run_batch(jobs, solver, time_limit, out_dir):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Run baseline solver on graphs.")
-    
-    parser.add_argument(
-        "paths",
-        nargs="*",
-        default=["src/tutorials/VCA/dataset/EA/EA_10x10/10x10_uniform_seed1.txt"],
-        help="One or more files or directories (recursively process .txt files). Defaults to a specific test file if omitted.",
-    )
     
     parser.add_argument(
         "-s",
@@ -168,10 +190,27 @@ def main(argv=None):
         help="Output directory for logs and individual text summaries (default: results).",
     )
     
+    parser.add_argument(
+        "--retry-timeouts", 
+        action="store_true",
+        help="Retry graphs whose latest CSV status is time_limit.")
+    
+    parser.add_argument(
+        "--retry-license", 
+        action="store_true",
+        help="Retry graphs whose latest CSV status is license_error.")
+    
+    parser.add_argument(
+        "paths",
+        nargs="*",
+        default=["src/tutorials/VCA/dataset/EA/EA_10x10/10x10_uniform_seed1.txt"],
+        help="One or more files or directories (recursively process .txt files). Defaults to a specific test file if omitted.",
+    )
+    
     args = parser.parse_args(argv)
 
     jobs = prepare_runs(args.paths, args.out_dir)
-    run_batch(jobs, args.solver, args.time_limit, args.out_dir)
+    run_batch(jobs, args.solver, args.time_limit, args.out_dir, args.retry_timeouts, args.retry_license)
 
 
 if __name__ == "__main__":
