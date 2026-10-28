@@ -109,6 +109,7 @@ def run_batch(jobs, solver, time_limit, out_dir, retry_timeouts=False, retry_lic
     fields = ("input_path", "solver", "status", "objective", "bound", "duration", "time_limit", "gap")
     csv_path = output_dir / "baseline_results.csv"
     latest_statuses = {}
+    needs_newline = False
     
     has_header = csv_path.exists() and csv_path.stat().st_size > 0    
     
@@ -129,6 +130,11 @@ def run_batch(jobs, solver, time_limit, out_dir, retry_timeouts=False, retry_lic
                 # Keep the latest status for each graph and solver.
                 key = (input_path, row["solver"])
                 latest_statuses[key] = row["status"]
+                
+        # Check if the CSV needs a newline before adding more results.
+        with csv_path.open("rb") as stream:
+            stream.seek(-1, 2)
+            needs_newline = stream.read(1) not in (b"\n", b"\r")
 
     statuses_to_skip = {"optimal", "infeasible", "unbounded", "infeasible_or_unbounded", "limit"}
     
@@ -137,11 +143,14 @@ def run_batch(jobs, solver, time_limit, out_dir, retry_timeouts=False, retry_lic
     if not retry_license:
         statuses_to_skip.add("license_error")
         
+    failed = False
     with csv_path.open("a", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         if not has_header:
             writer.writeheader()
-            stream.flush()
+        elif needs_newline:
+            stream.write("\n")
+        stream.flush()
             
             
         for file, graph_out_dir in jobs:
@@ -151,7 +160,16 @@ def run_batch(jobs, solver, time_limit, out_dir, retry_timeouts=False, retry_lic
             if latest_statuses.get(key) in statuses_to_skip:
                 continue
 
-            result = run_single_file(file, time_limit, graph_out_dir, solver)
+            result = {"status": "error", "objective": None, "bound": None,
+                      "duration": None, "time_limit": time_limit, "gap": None, "bits": None}
+            try:
+                result = run_single_file(file, time_limit, graph_out_dir, solver)
+            except KeyboardInterrupt:
+                result["status"] = "interrupted"
+            except Exception as exc:
+                print(f"Error solving {file}: {exc}")
+                
+            # Save each result before moving on. Stop if saving fails.
             writer.writerow({
                 "input_path": str(file.resolve()),
                 "solver": solver,
@@ -163,6 +181,13 @@ def run_batch(jobs, solver, time_limit, out_dir, retry_timeouts=False, retry_lic
                 "gap": result["gap"],
             })
             stream.flush()
+            latest_statuses[key] = result["status"]
+            if result["status"] == "interrupted":
+                return 130
+            if result["status"] in ("error", "license_error"):
+                failed = True
+                
+    return 1 if failed else 0
 
 
 def main(argv=None):
@@ -210,8 +235,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     jobs = prepare_runs(args.paths, args.out_dir)
-    run_batch(jobs, args.solver, args.time_limit, args.out_dir, args.retry_timeouts, args.retry_license)
+    return run_batch(jobs, args.solver, args.time_limit, args.out_dir, args.retry_timeouts, args.retry_license)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
