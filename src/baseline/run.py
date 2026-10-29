@@ -6,7 +6,7 @@ from pathlib import Path
 from .utils import base64_encode, read_nxgraph
 
 
-def write_result(result, output_path, print_terminal=True):
+def write_result(result, output_path):
     bits = result["bits"]
     fields = {
         "Status": result["status"],
@@ -23,11 +23,9 @@ def write_result(result, output_path, print_terminal=True):
         for name, value in fields.items()
     )
     Path(output_path).write_text(text)
-    if print_terminal:
-        print(text)
 
 
-def run_single_file(input_path, time_limit=3600, out_dir="results", solver="scip"):
+def run_single_file(input_path, time_limit=3600, out_dir="results", solver="scip", verbose=False):
     adapter = import_module(f".{solver}", package=__spec__.parent)
     
     input_path = Path(input_path)
@@ -39,12 +37,13 @@ def run_single_file(input_path, time_limit=3600, out_dir="results", solver="scip
     
     graph = read_nxgraph(str(input_path))
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    result = adapter.solve(graph, time_limit, log_path)
+    result = adapter.solve(graph, time_limit, log_path, verbose)
     write_result(result, output_path)
     return result
 
-def prepare_runs(paths, out_dir):
+def prepare_runs(paths, out_dir, output_root=None):
     out_dir = Path(out_dir).resolve()
+    output_root = Path(output_root).resolve() if output_root is not None else out_dir
     jobs = []
     inputs = set()
     outputs = {(out_dir / "baseline_results.csv").resolve()}
@@ -55,8 +54,8 @@ def prepare_runs(paths, out_dir):
         is_directory = source.is_dir()
         output_is_subdirectory = (
             is_directory
-            and out_dir != source
-            and out_dir.is_relative_to(source)
+            and output_root != source
+            and output_root.is_relative_to(source)
         )
         files = sorted(source.rglob("*.txt")) if is_directory else [source]
 
@@ -67,7 +66,7 @@ def prepare_runs(paths, out_dir):
             resolved_file = file.resolve()
 
             # Skip saved results in the output folder.
-            if output_is_subdirectory and resolved_file.is_relative_to(out_dir):
+            if output_is_subdirectory and resolved_file.is_relative_to(output_root):
                 continue
             
             # Keep the same input folder structure in the results.
@@ -103,8 +102,8 @@ def prepare_runs(paths, out_dir):
     return jobs
 
 
-def run_batch(jobs, solver, time_limit, out_dir, retry_timeouts=False, retry_license=False):
-    output_dir = Path(out_dir)
+def run_batch(jobs, solver, time_limit, out_dir, retry_timeouts=False, retry_license=False, verbose=False):
+    output_dir = Path(out_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     fields = ("input_path", "solver", "status", "objective", "bound", "duration", "time_limit", "gap")
     csv_path = output_dir / "baseline_results.csv"
@@ -143,7 +142,7 @@ def run_batch(jobs, solver, time_limit, out_dir, retry_timeouts=False, retry_lic
     if not retry_license:
         statuses_to_skip.add("license_error")
         
-    failed = False
+    processed = skipped = failures = 0
     with csv_path.open("a", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         if not has_header:
@@ -153,21 +152,26 @@ def run_batch(jobs, solver, time_limit, out_dir, retry_timeouts=False, retry_lic
         stream.flush()
             
             
-        for file, graph_out_dir in jobs:
+        for index, (file, graph_out_dir) in enumerate(jobs, 1):
+            progress = f"[{index}/{len(jobs)}]"
+            display_path = (graph_out_dir.resolve() / file.name).relative_to(output_dir).as_posix()
             
             # Skip this graph if its previous result for this solver doesn't need retrying.
             key = (str(file.resolve()), solver)
             if latest_statuses.get(key) in statuses_to_skip:
+                skipped += 1
+                print(f"{progress} Skipping {display_path}: {latest_statuses[key]}", flush=True)
                 continue
 
+            print(f"{progress} Solving {display_path}...", flush=True)
             result = {"status": "error", "objective": None, "bound": None,
                       "duration": None, "time_limit": time_limit, "gap": None, "bits": None}
             try:
-                result = run_single_file(file, time_limit, graph_out_dir, solver)
+                result = run_single_file(file, time_limit, graph_out_dir, solver, verbose)
             except KeyboardInterrupt:
                 result["status"] = "interrupted"
             except Exception as exc:
-                print(f"Error solving {file}: {exc}")
+                print(f"Error solving {display_path}: {exc}")
                 
             # Save each result before moving on. Stop if saving fails.
             writer.writerow({
@@ -182,12 +186,18 @@ def run_batch(jobs, solver, time_limit, out_dir, retry_timeouts=False, retry_lic
             })
             stream.flush()
             latest_statuses[key] = result["status"]
+            processed += 1
+            objective = f"{result['objective']:.6g}" if result["objective"] is not None else "N/A"
+            duration = f"{result['duration']:.2f}s" if result["duration"] is not None else "N/A"
+            print(f"{progress} {result['status']} | objective={objective} | duration={duration}", flush=True)
             if result["status"] == "interrupted":
+                print(f"Interrupted: {processed} processed, {skipped} skipped, {failures} failed", flush=True)
                 return 130
             if result["status"] in ("error", "license_error"):
-                failed = True
+                failures += 1
                 
-    return 1 if failed else 0
+    print(f"Finished: {processed} processed, {skipped} skipped, {failures} failed", flush=True)
+    return 1 if failures else 0
 
 
 def main(argv=None):
@@ -212,7 +222,7 @@ def main(argv=None):
         "-o", 
         "--out-dir", 
         default="results",
-        help="Output directory for logs and individual text summaries (default: results).",
+        help="Output root; results go in <out-dir>/<solver>/ (default: results).",
     )
     
     parser.add_argument(
@@ -224,6 +234,12 @@ def main(argv=None):
         "--retry-license", 
         action="store_true",
         help="Retry graphs whose latest CSV status is license_error.")
+
+    parser.add_argument(
+        "-v",
+        "--verbose", 
+        action="store_true", 
+        help="Show solver logs in the terminal.")
     
     parser.add_argument(
         "paths",
@@ -234,8 +250,9 @@ def main(argv=None):
     
     args = parser.parse_args(argv)
 
-    jobs = prepare_runs(args.paths, args.out_dir)
-    return run_batch(jobs, args.solver, args.time_limit, args.out_dir, args.retry_timeouts, args.retry_license)
+    output_dir = Path(args.out_dir) / args.solver
+    jobs = prepare_runs(args.paths, output_dir, args.out_dir)
+    return run_batch(jobs, args.solver, args.time_limit, output_dir, args.retry_timeouts, args.retry_license, args.verbose)
 
 
 if __name__ == "__main__":

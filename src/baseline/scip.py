@@ -38,10 +38,11 @@ def extract_result(model, x, time_limit):
     return result
 
 
-def solve(graph, time_limit=3600, log_path=None):
+def solve(graph, time_limit=3600, log_path=None, verbose=False):
 
     model = Model("ising_qubo")
     try:
+        model.hideOutput(not verbose)
         x = {node: model.addVar(vtype="B", name=f"x_{i}")
              for i, node in enumerate(graph.nodes)}
 

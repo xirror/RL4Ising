@@ -39,11 +39,11 @@ def extract_result(model, x, time_limit):
     return result
 
 
-def solve(graph, time_limit=3600, log_path=None):
+def solve(graph, time_limit=3600, log_path=None, verbose=False):
     nodes = len(graph.nodes)
     J = nx.to_numpy_array(graph)
     try:
-        with gp.Model("maxcut_qubo") as model:
+        with gp.Env(params={"LogToConsole": int(verbose)}) as env, gp.Model("maxcut_qubo", env=env) as model:
             x = model.addVars(nodes, vtype=gp.GRB.BINARY)
             objective = gp.quicksum(
                 -J[i, j] * (2 * x[i] - 1) * (2 * x[j] - 1)
