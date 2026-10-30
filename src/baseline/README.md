@@ -50,6 +50,7 @@ python -m src.baseline.run --solver gurobi -o results src/data/graphs
 | N/A | --retry-license | False | Retry entries that previously failed due to license_error. |
 | N/A | --retry-timeouts | False | Retry entries that previously hit the time_limit. |
 | -v | --verbose | False | Show solver logs in the terminal. |
+| -q | --quiet | False | Hide per-graph progress output while keeping errors and final counts. |
 
 ### Outputs and progress
 
@@ -58,7 +59,8 @@ Outputs include `baseline_results.csv`, `.txt` summaries, and `.log` files,
 preserving input subfolders. Pass the output root with `-o` and the solver folder is added automatically.
 
 The terminal shows progress, status, objective, duration, and final counts.
-Use `--verbose` to also show solver logs. Before solving, the runner checks that results won’t overwrite input files or each other.
+Solver logs are hidden by default; use `--verbose` to show them. Use `--quiet` to
+hide per-graph progress while keeping errors and final counts.
 
 ### Resuming and failures
 

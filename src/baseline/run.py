@@ -102,16 +102,12 @@ def prepare_runs(paths, out_dir, output_root=None):
     return jobs
 
 
-def run_batch(jobs, solver, time_limit, out_dir, retry_timeouts=False, retry_license=False, verbose=False):
-    output_dir = Path(out_dir).resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    fields = ("input_path", "solver", "status", "objective", "bound", "duration", "time_limit", "gap")
-    csv_path = output_dir / "baseline_results.csv"
+def load_previous_results(csv_path, fields):
     latest_statuses = {}
     needs_newline = False
-    
-    has_header = csv_path.exists() and csv_path.stat().st_size > 0    
-    
+
+    has_header = csv_path.exists() and csv_path.stat().st_size > 0
+
     # Load previous csv results so completed graphs can be skipped on reruns.
     if has_header:
         with csv_path.open(newline="", encoding="utf-8") as stream:
@@ -134,6 +130,16 @@ def run_batch(jobs, solver, time_limit, out_dir, retry_timeouts=False, retry_lic
         with csv_path.open("rb") as stream:
             stream.seek(-1, 2)
             needs_newline = stream.read(1) not in (b"\n", b"\r")
+
+    return latest_statuses, has_header, needs_newline
+
+
+def run_batch(jobs, solver, time_limit, out_dir, retry_timeouts=False, retry_license=False, verbose=False, quiet=False):
+    output_dir = Path(out_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    fields = ("input_path", "solver", "status", "objective", "bound", "duration", "time_limit", "gap")
+    csv_path = output_dir / "baseline_results.csv"
+    latest_statuses, has_header, needs_newline = load_previous_results(csv_path, fields)
 
     statuses_to_skip = {"optimal", "infeasible", "unbounded", "infeasible_or_unbounded", "limit"}
     
@@ -160,10 +166,13 @@ def run_batch(jobs, solver, time_limit, out_dir, retry_timeouts=False, retry_lic
             key = (str(file.resolve()), solver)
             if latest_statuses.get(key) in statuses_to_skip:
                 skipped += 1
-                print(f"{progress} Skipping {display_path}: {latest_statuses[key]}", flush=True)
+                if not quiet:
+                    print(f"{progress} Skipping {display_path}: {latest_statuses[key]}", flush=True)
                 continue
 
-            print(f"{progress} Solving {display_path}...", flush=True)
+            if not quiet:
+                print(f"{progress} Solving {display_path}...", flush=True)
+
             result = {"status": "error", "objective": None, "bound": None,
                       "duration": None, "time_limit": time_limit, "gap": None, "bits": None}
             try:
@@ -187,15 +196,16 @@ def run_batch(jobs, solver, time_limit, out_dir, retry_timeouts=False, retry_lic
             stream.flush()
             latest_statuses[key] = result["status"]
             processed += 1
-            objective = f"{result['objective']:.6g}" if result["objective"] is not None else "N/A"
-            duration = f"{result['duration']:.2f}s" if result["duration"] is not None else "N/A"
-            print(f"{progress} {result['status']} | objective={objective} | duration={duration}", flush=True)
+            if not quiet:
+                objective = f"{result['objective']:.6g}" if result["objective"] is not None else "N/A"
+                duration = f"{result['duration']:.2f}s" if result["duration"] is not None else "N/A"
+                print(f"{progress} {result['status']} | objective={objective} | duration={duration}", flush=True)
             if result["status"] == "interrupted":
                 print(f"Interrupted: {processed} processed, {skipped} skipped, {failures} failed", flush=True)
                 return 130
             if result["status"] in ("error", "license_error"):
                 failures += 1
-                
+
     print(f"Finished: {processed} processed, {skipped} skipped, {failures} failed", flush=True)
     return 1 if failures else 0
 
@@ -240,7 +250,13 @@ def main(argv=None):
         "--verbose", 
         action="store_true", 
         help="Show solver logs in the terminal.")
-    
+
+    parser.add_argument(
+        "-q", 
+        "--quiet", 
+        action="store_true",
+        help="Hide per-graph progress output while keeping errors and final counts.")
+
     parser.add_argument(
         "paths",
         nargs="*",
@@ -252,7 +268,7 @@ def main(argv=None):
 
     output_dir = Path(args.out_dir) / args.solver
     jobs = prepare_runs(args.paths, output_dir, args.out_dir)
-    return run_batch(jobs, args.solver, args.time_limit, output_dir, args.retry_timeouts, args.retry_license, args.verbose)
+    return run_batch(jobs, args.solver, args.time_limit, output_dir, args.retry_timeouts, args.retry_license, args.verbose, args.quiet)
 
 
 if __name__ == "__main__":
